@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import numpy as np
 import torch
-from transformers import AutoConfig, AutoTokenizer
+from transformers import AutoConfig, AutoTokenizer, __version__ as transformers_version
+from packaging import version
 
 from onnxruntime import InferenceSession, OrtValue
 
@@ -68,6 +69,7 @@ def get_sample_with_past_kv_inputs(
     device: torch.device,
     batch_size: int,
     past_seq_len: int,
+    max_seq_len: int,
     use_fp16: bool = False,
     engine: str = "pt",
     return_dict: bool = False,
@@ -77,17 +79,17 @@ def get_sample_with_past_kv_inputs(
     attention_mask = torch.ones(batch_size, past_seq_len + 1, dtype=torch.int64)
     # position_ids is of shape (batch_size, 1)
     position_ids = get_position_ids(attention_mask, use_past_kv=True)
-    past_kv = get_past_kv_inputs(config, batch_size, past_seq_len, use_fp16, world_size=world_size)
+    past_kv = get_past_kv_inputs(config, device, batch_size, past_seq_len, max_seq_len, use_fp16, engine, world_size=world_size)
 
     # Convert inputs to NumPy (for ORT) or send to device (for PyTorch)
     input_ids = input_ids.numpy() if engine == "ort" else input_ids.to(device)
     attention_mask = attention_mask.numpy() if engine == "ort" else attention_mask.to(device)
     position_ids = position_ids.numpy() if engine == "ort" else position_ids.to(device)
-    past_kv = (
-        flatten_past_kv_inputs(past_kv)
-        if engine == "ort"
-        else list(map(lambda kv: (kv[0].to(device), kv[1].to(device)), past_kv))
-    )
+    # past_kv = (
+    #     flatten_past_kv_inputs(past_kv)
+    #     if engine == "ort"
+    #     else list(map(lambda kv: (kv[0].to(device), kv[1].to(device)), past_kv))
+    # )
 
     if not return_dict:
         # For export
@@ -103,7 +105,7 @@ def get_sample_with_past_kv_inputs(
         assert isinstance(past_kv, dict)
         inputs.update(past_kv)
     else:
-        assert isinstance(past_kv, list)
+        # assert isinstance(past_kv, list)
         inputs["past_key_values"] = past_kv
 
     return inputs
@@ -136,17 +138,17 @@ def get_merged_sample_with_past_kv_inputs(
     attention_mask = torch.ones(batch_size, past_seq_len + seq_len, dtype=torch.int64)
     # position_ids is of shape (batch_size, seq_len) for prompt generation, (batch_size, 1) for token generation
     position_ids = get_position_ids(attention_mask, use_past_kv=(past_seq_len != 0))
-    past_kv = get_past_kv_inputs(config, batch_size, past_seq_len, use_fp16, world_size=world_size)
+    past_kv = get_past_kv_inputs(config, device, batch_size, past_seq_len, max_seq_len, use_fp16, engine, world_size=world_size)
 
     # Convert inputs to NumPy (for ORT) or send to device (for PyTorch)
     input_ids = input_ids.numpy() if engine == "ort" else input_ids.to(device)
     attention_mask = attention_mask.numpy() if engine == "ort" else attention_mask.to(device)
     position_ids = position_ids.numpy() if engine == "ort" else position_ids.to(device)
-    past_kv = (
-        flatten_past_kv_inputs(past_kv)
-        if engine == "ort"
-        else list(map(lambda kv: (kv[0].to(device), kv[1].to(device)), past_kv))
-    )
+    # past_kv = (
+    #     flatten_past_kv_inputs(past_kv)
+    #     if engine == "ort"
+    #     else list(map(lambda kv: (kv[0].to(device), kv[1].to(device)), past_kv))
+    # )
 
     if not return_dict:
         # For export
@@ -162,11 +164,11 @@ def get_merged_sample_with_past_kv_inputs(
         assert isinstance(past_kv, dict)
         inputs.update(past_kv)
 
-        if use_buffer_share:
-            inputs = enable_past_present_share_buffer(inputs, past_seq_len, max_seq_len)
+        # if use_buffer_share:
+        #     inputs = enable_past_present_share_buffer(inputs, past_seq_len, max_seq_len)
 
     else:
-        assert isinstance(past_kv, list)
+        # assert isinstance(past_kv, list)
         inputs["past_key_values"] = past_kv
 
     return inputs
@@ -225,8 +227,46 @@ def get_msft_sample_inputs(
 
 
 # Create past_key_values
+def get_past_kv_inputs(
+    config: AutoConfig,
+    device: torch.device,
+    batch_size: int,
+    past_seq_len: int = 0,
+    max_seq_len: int = 0,
+    use_fp16: bool = False,
+    engine: str = "pt",
+    world_size: int = 1,
+):
+    past_kv = None
+
+    if version.parse(transformers_version) <= version.parse("4.37.2"):
+        past_kv = get_past_kv_tensors(config, batch_size, past_seq_len, use_fp16, world_size)
+    else:
+        past_kv = get_past_kv_cache(config, device, batch_size, past_seq_len, max_seq_len, use_fp16, world_size)
+
+    # past_kv = (
+    #     flatten_past_kv_inputs(past_kv)
+    #     if engine == "ort"
+    #     else list(map(lambda kv: (kv[0].to(device), kv[1].to(device)), past_kv))
+    # )
+
+    if engine == "ort":
+        past_kv = flatten_past_kv_inputs(past_kv)
+    elif engine == "pt" and version.parse(transformers_version) <= version.parse("4.37.2"):
+        past_kv = list(map(lambda kv: (kv[0].to(device), kv[1].to(device)), past_kv))
+    
+    return past_kv
+
+
+# Create past_key_values as list (requires transformers v4.37.2 or older)
 # Each is of shape (batch_size, num_heads, past_sequence_length, head_size)
-def get_past_kv_inputs(config: AutoConfig, batch_size: int, past_seq_len: int, use_fp16: bool, world_size: int = 1):
+def get_past_kv_tensors(
+    config: AutoConfig,
+    batch_size: int,
+    past_seq_len: int,
+    use_fp16: bool,
+    world_size: int = 1,
+):
     num_heads = config.num_key_value_heads // world_size
     head_size = config.head_dim if hasattr(config, "head_dim") else config.hidden_size // config.num_attention_heads
     torch_dtype = torch.float16 if use_fp16 else torch.float32
@@ -240,12 +280,46 @@ def get_past_kv_inputs(config: AutoConfig, batch_size: int, past_seq_len: int, u
     return past_kv
 
 
-# Convert list of past_key_values to dict of past_key and past_value
-def flatten_past_kv_inputs(past_key_values: list[tuple[torch.Tensor, torch.Tensor]]):
+# Create past_key_values as cache class (requires transformers v4.38 or newer)
+def get_past_kv_cache(
+    config: AutoConfig,
+    device: torch.device,
+    batch_size: int,
+    past_seq_len: int,
+    max_seq_len: int,
+    use_fp16: bool,
+    world_size: int = 1,
+):
+    num_heads = config.num_key_value_heads // world_size
+    head_size = config.head_dim if hasattr(config, "head_dim") else config.hidden_size // config.num_attention_heads
+    torch_dtype = torch.float16 if use_fp16 else torch.float32
+    
+    # from transformers import DynamicCache
+    # past_kv = DynamicCache()
+
+    from transformers import StaticCache
+    past_kv = StaticCache(config, batch_size, max_seq_len, device=device, dtype=torch_dtype)
+
+    for i in range(config.num_hidden_layers):
+        past_kv.key_cache[i][:batch_size, :num_heads, :past_seq_len, :head_size] = torch.rand(batch_size, num_heads, past_seq_len, head_size, device=device, dtype=torch_dtype)
+        past_kv.value_cache[i][:batch_size, :num_heads, :past_seq_len, :head_size] = torch.rand(batch_size, num_heads, past_seq_len, head_size, device=device, dtype=torch_dtype)
+
+    return past_kv
+
+
+# Convert list of past_key_values or past_key_values class to dict of past_key and past_value
+def flatten_past_kv_inputs(past_key_values: union[list[tuple[torch.Tensor, torch.Tensor], Cache]]):
     past_kv = {}
-    for i, (past_k, past_v) in enumerate(past_key_values):
-        past_kv[f"past_key_values.{i}.key"] = past_k.detach().cpu().numpy()
-        past_kv[f"past_key_values.{i}.value"] = past_v.detach().cpu().numpy()
+
+    if version.parse(transformers_version) <= version.parse("4.37.2"):
+        for i, (past_k, past_v) in enumerate(past_key_values):
+            past_kv[f"past_key_values.{i}.key"] = past_k.detach().cpu().numpy()
+            past_kv[f"past_key_values.{i}.value"] = past_v.detach().cpu().numpy()
+    else:
+        for i, (past_k, past_v) in enumerate(zip(past_key_values.key_cache, past_key_values.value_cache)):
+            print(past_k.shape, past_v.shape)
+            past_kv[f"past_key_values.{i}.key"] = past_k.detach().cpu().numpy()
+            past_kv[f"past_key_values.{i}.value"] = past_v.detach().cpu().numpy()
     return past_kv
 
 
@@ -266,8 +340,8 @@ def convert_inputs_for_ort(
             ort_inputs[k] = v.detach().cpu().numpy()
 
     # Reshape KV caches if using past-present-share-buffer
-    if use_buffer_share:
-        ort_inputs = enable_past_present_share_buffer(ort_inputs, past_seq_len, max_seq_len)
+    # if use_buffer_share:
+    #     ort_inputs = enable_past_present_share_buffer(ort_inputs, past_seq_len, max_seq_len)
 
     return ort_inputs
 

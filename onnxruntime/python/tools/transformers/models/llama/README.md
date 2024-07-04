@@ -183,42 +183,22 @@ sess.run_with_iobinding(io_binding)
 io_binding.synchronize_outputs()
 ```
 
-Export for INT8 CPU (SmoothQuant)
-```
-# From source:
-$ python3 -m models.llama.convert_to_onnx -m meta-llama/Llama-2-7b-hf --output llama2-7b-int8 --precision int8 --quantization_method smooth_quant --execution_provider cpu --no_merged
-
-# From wheel:
-$ python3 -m onnxruntime.transformers.models.llama.convert_to_onnx -m meta-llama/Llama-2-7b-hf --output llama2-7b-int8 --precision int8 --quantization_method smooth_quant --execution_provider cpu --no_merged
-```
-
-Note: [Intel's Neural Compressor](https://github.com/intel/neural-compressor) takes time to run the SmoothQuant quantization algorithm on LLMs. On an [Azure Standard_NC24s_v3 VM](https://learn.microsoft.com/en-us/azure/virtual-machines/ncv3-series), it takes about ~30-45 min for each of the exported ONNX models.
-
-Export for INT8 CPU (DynamicQuant)
-```
-# From source:
-$ python3 -m models.llama.convert_to_onnx -m meta-llama/Llama-2-7b-hf --output llama2-7b-int8 --precision int8 --quantization_method quantize_dynamic --execution_provider cpu
-
-# From wheel:
-$ python3 -m onnxruntime.transformers.models.llama.convert_to_onnx -m meta-llama/Llama-2-7b-hf --output llama2-7b-int8 --precision int8 --quantization_method quantize_dynamic --execution_provider cpu
-```
-
 Export for INT4 CUDA
 ```
 # From source:
-$ python3 -m models.llama.convert_to_onnx -m meta-llama/Llama-2-7b-hf --output llama2-7b-int4-gpu --precision int4 --quantization_method blockwise --execution_provider cuda --use_gqa
+$ python3 -m models.llama.convert_to_onnx -m meta-llama/Llama-2-7b-hf --output llama2-7b-int4-gpu --precision int4 --execution_provider cuda --use_gqa
 
 # From wheel:
-$ python3 -m onnxruntime.transformers.models.llama.convert_to_onnx -m meta-llama/Llama-2-7b-hf --output llama2-7b-int4-gpu --precision int4 --quantization_method blockwise --execution_provider cuda --use_gqa
+$ python3 -m onnxruntime.transformers.models.llama.convert_to_onnx -m meta-llama/Llama-2-7b-hf --output llama2-7b-int4-gpu --precision int4 --execution_provider cuda --use_gqa
 ```
 
 Export for INT4 CPU
 ```
 # From source:
-$ python3 -m models.llama.convert_to_onnx -m meta-llama/Llama-2-7b-hf --output llama2-7b-int4-cpu --precision int4 --quantization_method blockwise --execution_provider cpu --use_gqa
+$ python3 -m models.llama.convert_to_onnx -m meta-llama/Llama-2-7b-hf --output llama2-7b-int4-cpu --precision int4 --execution_provider cpu --use_gqa
 
 # From wheel:
-$ python3 -m onnxruntime.transformers.models.llama.convert_to_onnx -m meta-llama/Llama-2-7b-hf --output llama2-7b-int4-cpu --precision int4 --quantization_method blockwise --execution_provider cpu --use_gqa
+$ python3 -m onnxruntime.transformers.models.llama.convert_to_onnx -m meta-llama/Llama-2-7b-hf --output llama2-7b-int4-cpu --precision int4 --execution_provider cpu --use_gqa
 ```
 
 Export LLaMA-2 70B sharded model into 4 partitions
@@ -501,25 +481,6 @@ For end-to-end inference, please visit the [ONNX Runtime Inference Examples fold
 ## Introduction
 
 These tools for LLaMA-2 also allow the quantization and optimization of Mistral in ORT. 
-
-## Exporting Mistral
-
-There is currently one supported way to export Mistral to ONNX format:
-
-### [Hugging Face Optimum](https://github.com/huggingface/optimum)
-
-
-The following command will export Mistral in full precision:
-```
-python -m optimum.exporters.onnx -m mistralai/Mistral-7B-v0.1 --library-name transformers /path/to/model/directory
-```
-
-## Optimizing and Quantizing Mistral
-
-To quantize Mistral to FP16 and apply fusion optimizations, you can run the following command:
-```
-python -m models.llama.convert_to_onnx -i /path/to/model/directory -o /path/to/optimized_model/directory -p fp16 --optimize_optimum -m mistralai/Mistral-7B-v0.1
-```
 
 ## Benchmark Mistral
 The benchmarking scripts in the LLaMA directory support Mistral benchmarking. To benchmark the ORT version, you can run: 

@@ -28,7 +28,7 @@ def setup_torch_model(args, location, auth, torch_dtype=torch.float32, device=No
                 location, use_auth_token=auth, cache_dir=args.cache_dir, trust_remote_code=auth
             )
             l_config.use_cache = True
-            l_config._attn_implementation = "eager"  # "eager" uses LlamaAttention for attention layer
+            # l_config._attn_implementation = "eager"  # "eager" uses LlamaAttention for attention layer
             llama = AutoModelForCausalLM.from_pretrained(
                 location,
                 use_auth_token=auth,

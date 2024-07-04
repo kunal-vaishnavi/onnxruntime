@@ -63,14 +63,15 @@ def get_inputs(args: argparse.Namespace, ort_model_inputs_len: int):
             args.config,
             args.target_device,
             args.batch_size,
-            args.sequence_length,
+            seq_len=args.sequence_length,
             return_dict=True,
         )
         iter_inputs = get_sample_with_past_kv_inputs(
             args.config,
             args.target_device,
             args.batch_size,
-            args.sequence_length,
+            past_seq_len=args.sequence_length,
+            max_seq_len=max_seq_len,
             use_fp16=args.use_fp16,
             return_dict=True,
         )
@@ -89,7 +90,8 @@ def get_inputs(args: argparse.Namespace, ort_model_inputs_len: int):
                 args.config,
                 args.target_device,
                 args.batch_size,
-                args.sequence_length,
+                past_seq_len=args.sequence_length,
+                max_seq_len=max_seq_len,
                 use_fp16=args.use_fp16,
                 return_dict=True,
             )

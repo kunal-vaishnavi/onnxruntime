@@ -18,8 +18,6 @@ from llama_inputs import (
     add_io_bindings_as_ortvalues,
     convert_inputs_for_ort,
     get_merged_sample_with_past_kv_inputs,
-    get_sample_inputs,
-    get_sample_with_past_kv_inputs,
     verify_ort_inputs,
 )
 from llama_torch import setup_torch_model
@@ -31,7 +29,7 @@ logger = logging.getLogger("")
 
 
 def get_sequence_lengths(args: argparse.Namespace, config: AutoConfig):
-    past_sequence_length, curr_sequence_length = (8, 1) if args.use_past_kv else (0, 8)
+    past_sequence_length, curr_sequence_length = (2048, 1) if args.use_past_kv else (0, 2048)
     max_sequence_length = config.max_position_embeddings
     return past_sequence_length, curr_sequence_length, max_sequence_length
 
@@ -42,32 +40,18 @@ def get_inputs(args: argparse.Namespace, config: AutoConfig):
     batch_size = 2
     past_sequence_length, sequence_length, max_sequence_length = get_sequence_lengths(args, config)
 
-    if args.merged:
-        inputs = get_merged_sample_with_past_kv_inputs(
-            config,
-            args.device,
-            batch_size,
-            seq_len=sequence_length,
-            past_seq_len=past_sequence_length,
-            max_seq_len=max_sequence_length,
-            use_fp16=args.use_fp16,
-            use_buffer_share=args.use_buffer_share,
-            return_dict=True,
-            world_size=world_size,
-        )
-    elif args.use_past_kv:
-        inputs = get_sample_with_past_kv_inputs(
-            config,
-            args.device,
-            batch_size,
-            sequence_length,
-            use_fp16=args.use_fp16,
-            return_dict=True,
-            world_size=world_size,
-        )
-    else:
-        inputs = get_sample_inputs(config, args.device, batch_size, sequence_length, return_dict=True)
-
+    inputs = get_merged_sample_with_past_kv_inputs(
+        config,
+        args.device,
+        batch_size,
+        seq_len=sequence_length,
+        past_seq_len=past_sequence_length,
+        max_seq_len=max_sequence_length,
+        use_fp16=args.use_fp16,
+        use_buffer_share=args.use_buffer_share,
+        return_dict=True,
+        world_size=world_size,
+    )
     return inputs
 
 
@@ -155,7 +139,7 @@ def verify_parity(
     logger.info(f"ONNX Runtime took {end_time - start_time} s")
 
     # Compare PyTorch and ONNX Runtime accuracy
-    tol = 2e1 if "int4" in args.onnx_model_path or "int8" in args.onnx_model_path else 5e-1
+    tol = 2e1 if "int4" in args.onnx_model_path else 5e-1
     parity = np.allclose(pt_outputs, ort_outputs, rtol=tol, atol=tol)
     logger.warning(f"Are PyTorch and ONNX Runtime results close? {parity}")
     if not parity:
@@ -190,7 +174,7 @@ def get_args(argv: list[str]):
     )
 
     parser.add_argument(
-        "-ep",
+        "-e",
         "--execution_provider",
         required=False,
         default="cpu",
@@ -207,14 +191,6 @@ def get_args(argv: list[str]):
     parser.set_defaults(verbose=False)
 
     parser.add_argument(
-        "-p",
-        "--use_past_kv",
-        action="store_true",
-        help="Use past key and past value as inputs to the model. Necessary for decoder_with_past_model.onnx models.",
-    )
-    parser.set_defaults(use_past_kv=False)
-
-    parser.add_argument(
         "-g",
         "--use_buffer_share",
         action="store_true",
@@ -223,17 +199,10 @@ def get_args(argv: list[str]):
     parser.set_defaults(use_buffer_share=False)
 
     parser.add_argument(
-        "--merged",
-        action="store_true",
-        help="Use merged model (i.e. decoder_merged_model.onnx).",
-    )
-    parser.set_defaults(merged=False)
-
-    parser.add_argument(
-        "-fp",
+        "-p",
         "--precision",
         required=True,
-        choices=["int4", "int8", "fp16", "fp32"],
+        choices=["int4", "fp16", "fp32"],
         help="Precision of model",
     )
 
@@ -254,10 +223,10 @@ def get_args(argv: list[str]):
 
     args = parser.parse_args() if argv == [] else parser.parse_args(argv)
 
-    # Use FP32 precision for FP32, INT8, INT4 CPU models, use FP16 precision for FP16 and INT4 GPU models
+    # Use FP32 precision for FP32, INT4 CPU models, use FP16 precision for FP16 and INT4 GPU models
     args.precision = (
         "fp32"
-        if args.precision in {"int8", "fp32"} or (args.precision == "int4" and args.execution_provider == "cpu")
+        if args.precision == "fp32" or (args.precision == "int4" and args.execution_provider == "cpu")
         else "fp16"
     )
     return args
@@ -278,28 +247,25 @@ def main(argv: list[str] = []):  # noqa: B006
     location = args.model_name if use_auth_token else args.torch_model_directory
 
     kv_cache_ortvalues = {}
-    if not args.merged:
-        verify_parity(args, location, use_auth_token, kv_cache_ortvalues)
-    else:
-        config = llama = None
-        if not args.small_gpu:
-            config, llama = setup_torch_model(
-                args,
-                location,
-                use_auth_token,
-                torch_dtype=(torch.float16 if args.use_fp16 else torch.float32),
-                device=args.device,
-            )
-
-        # Verify prompt processing in merged model (decoder_model.onnx)
-        args.use_past_kv = False
-        kv_cache_ortvalues = verify_parity(
-            args, location, use_auth_token, kv_cache_ortvalues, pytorch_model=llama, config=config
+    config = llama = None
+    if not args.small_gpu:
+        config, llama = setup_torch_model(
+            args,
+            location,
+            use_auth_token,
+            torch_dtype=(torch.float16 if args.use_fp16 else torch.float32),
+            device=args.device,
         )
 
-        # Verify token generation in merged model (decoder_with_past_model.onnx)
-        args.use_past_kv = True
-        verify_parity(args, location, use_auth_token, kv_cache_ortvalues, pytorch_model=llama, config=config)
+    # Verify prompt processing in merged model (decoder_model.onnx)
+    setattr(args, "use_past_kv", False)
+    kv_cache_ortvalues = verify_parity(
+        args, location, use_auth_token, kv_cache_ortvalues, pytorch_model=llama, config=config
+    )
+
+    # Verify token generation in merged model (decoder_with_past_model.onnx)
+    setattr(args, "use_past_kv", True)
+    verify_parity(args, location, use_auth_token, kv_cache_ortvalues, pytorch_model=llama, config=config)
 
 
 if __name__ == "__main__":
