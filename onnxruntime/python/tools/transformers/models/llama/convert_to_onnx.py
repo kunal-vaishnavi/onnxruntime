@@ -134,7 +134,7 @@ def run_dynamo_export(
 
     # Export decoder_with_past_model.onnx
     input_ids, attn_mask, pos_ids, past_kv = get_sample_with_past_kv_inputs(
-        l_config, device, batch_size, sequence_length, max_sequence_length world_size=world_size
+        l_config, device, batch_size, sequence_length, max_sequence_length, world_size=world_size
     )
     temp_dir = args.output  # tempfile.TemporaryDirectory()
     temp_path = os.path.join(temp_dir, "temp.onnx")  # os.path.join(temp_dir.name, "temp.onnx")
